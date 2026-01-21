@@ -1,0 +1,164 @@
+================================================================================
+ED-TRAIL - IMPLEMENTATION SUMMARY (info.txt)
+================================================================================
+
+Completed: 2026-01-21
+Inherits: ED-BASE (FROZEN)
+
+================================================================================
+WHAT WAS IMPLEMENTED
+================================================================================
+
+MIGRATIONS (6 Tables)
+---------------------
+✓ 001_data_sources.sql      - Origin points for lineage tracking
+✓ 002_data_assets.sql       - Tracked data elements
+✓ 003_lineage_edges.sql     - Connections between assets (with cycle prevention)
+✓ 004_integrity_checks.sql  - Validation rules
+✓ 005_break_events.sql      - Detected integrity failures
+✓ 006_risk_scores.sql       - Computed risk scores per asset
+
+All tables:
+- Use RLS policies for team isolation
+- Reference ED-BASE teams table
+- Store monetary values in paise (INR minor units)
+
+BACKEND SERVICES
+----------------
+✓ utils/currency.py         - Rupees ↔ paise conversion
+✓ services/data_sources.py  - CRUD for data sources
+✓ services/data_assets.py   - CRUD for data assets
+✓ services/lineage.py       - Edge creation with cycle detection
+✓ services/integrity.py     - Check definition and result recording
+✓ services/breaks.py        - Break event emission and resolution
+✓ services/risk.py          - Score computation and retrieval
+✓ routes/trail.py           - All API endpoints
+
+All services:
+- Use ED-BASE middleware (require_auth, require_team, rate_limit)
+- Use ED-BASE transactions (IsolationLevel)
+- Use ED-BASE audit logging (log_event)
+- Use ED-BASE authorization (require_team_access)
+
+API ENDPOINTS
+-------------
+POST   /api/trail/sources              Create data source
+GET    /api/trail/sources              List data sources
+GET    /api/trail/sources/:id          Get data source
+POST   /api/trail/assets               Register data asset
+GET    /api/trail/assets               List data assets
+POST   /api/trail/edges                Link lineage edge
+GET    /api/trail/assets/:id/lineage   Get asset lineage
+POST   /api/trail/edges/:id/validate   Validate edge
+POST   /api/trail/checks               Create integrity check
+GET    /api/trail/checks               List checks
+POST   /api/trail/breaks               Emit break event
+GET    /api/trail/breaks               List break events
+POST   /api/trail/breaks/:id/resolve   Resolve break event
+POST   /api/trail/scores               Store risk score
+GET    /api/trail/assets/:id/score     Get asset score
+GET    /api/trail/scores/high-risk     List high-risk assets
+
+FRONTEND
+--------
+✓ src/hooks/useTrailApi.js      - API fetch functions
+✓ src/utils/currency.js         - INR display formatting
+✓ src/components/LineageGraph.jsx - Lineage visualization
+✓ src/components/BreakEvents.jsx  - Break events list
+✓ src/components/RiskScores.jsx   - Risk scores list
+✓ src/App.jsx                   - Tab navigation
+
+================================================================================
+WHAT WAS INTENTIONALLY AVOIDED
+================================================================================
+
+Per NEXT-STEPS.md and prd.md:
+- ❌ No modifications to ED-BASE code
+- ❌ No reimplementation of auth/session/audit
+- ❌ No hardcoded INR in ED-BASE
+- ❌ No renaming of existing DB columns
+- ❌ No new security abstractions
+- ❌ No design polish (correctness only)
+- ❌ No BI/reporting features
+- ❌ No ML fraud detection
+
+================================================================================
+WHAT WAS NOT IMPLEMENTED
+================================================================================
+
+Future enhancements (not current scope):
+- Automated integrity check runner (background job)
+- Lineage graph visualization (D3/canvas)
+- Email/Slack alerting for break events
+- Audit period management
+- Bulk import/export
+- API rate limit customization per endpoint
+- Role-based check permissions
+
+================================================================================
+ED-TRAIL FILES THAT MUST NOT BE MODIFIED CASUALLY
+================================================================================
+
+These files contain core business logic:
+
+ed-trail/migrations/*.sql           - Schema definitions
+ed-trail/backend/services/lineage.py - Cycle detection logic
+ed-trail/backend/services/breaks.py  - Break event emission
+ed-trail/backend/utils/currency.py   - INR conversion (single source)
+
+================================================================================
+CURRENCY HANDLING
+================================================================================
+
+Standard: INR (Indian Rupee)
+Storage: Paise (100 paise = 1 rupee)
+
+Flow:
+1. UI accepts amounts in rupees
+2. rupees_to_paise() converts before storage
+3. Database stores BIGINT paise values
+4. paise_to_rupees() / format_inr() for display
+
+ED-BASE columns remain unchanged. Only ED-TRAIL uses INR logic.
+
+================================================================================
+RELATIONSHIP TO ED-BASE
+================================================================================
+
+ED-TRAIL USES (unchanged):
+- middleware/auth.py          (session validation)
+- middleware/rate_limit.py    (request limiting)
+- middleware/error_handler.py (generic errors)
+- services/transactions.py    (ACID guarantees)
+- services/audit.py           (logging)
+- services/authorization.py   (team access)
+- services/idempotency.py     (exactly-once)
+
+ED-TRAIL ADDS:
+- 6 new tables (ed_trail_*)
+- Domain-specific services
+- Lineage-focused API
+- INR currency handling
+
+================================================================================
+FINAL STATEMENT
+================================================================================
+
+ED-BASE WAS NOT MODIFIED.
+
+All security guarantees are inherited:
+- Session revocation (Invariant #1)
+- Exactly-once execution (Invariant #2)
+- Team isolation (Invariant #3)
+- Immutable audit logs (Invariant #5)
+- Backend authorization (Invariant #6)
+- ACID transactions (Invariants #7, #8)
+- No information disclosure (Invariant #9)
+- Actor attribution (Invariant #10)
+
+ED-BASE is the lock.
+ED-TRAIL is the value.
+
+This implementation is complete per ed-trail/prd.md.
+
+================================================================================
