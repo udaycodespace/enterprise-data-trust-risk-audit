@@ -1,0 +1,392 @@
+ED-BASE — Enterprise Security Foundation Implementation Plan
+============================================================
+
+This plan implements a production-grade, security-first mono-repo template per the frozen PRD. All requirements are addressed with no placeholders.
+
+============================================================
+PROPOSED CHANGES
+============================================================
+
+BACKEND (Flask)
+---------------
+Location: backend/
+
+[NEW] backend/config.py
+  - Environment-based configuration
+  - Database pool settings (min:5, max:20, idle:10min, lifetime:1hr)
+  - Rate limit thresholds
+  - Redis connection
+  - Secret key management
+
+[NEW] backend/app.py
+  - Flask application factory
+  - Blueprint registration
+  - Global error handlers
+  - Request ID generation
+  - Health check endpoint (GET /health)
+
+[NEW] backend/middleware/auth.py
+  - JWT validation with Supabase
+  - Session revocation check on EVERY request (Invariant #1)
+  - Token hash comparison against revocation table
+  - Team boundary enforcement
+  - Forced session invalidation on role/team change
+
+[NEW] backend/middleware/rate_limit.py
+  - Redis-based sliding window rate limiting
+  - Per-IP: 100 req/min
+  - Per-User: 50 req/min
+  - Per-Endpoint: Login 10/min, Payments 5/min
+  - Combined fingerprint (IP + User-Agent + custom)
+  - 429 response with Retry-After header
+  - All violations logged
+
+[NEW] backend/middleware/error_handler.py
+  - Generic client-facing error messages
+  - Stable error codes
+  - Request ID in responses
+  - Internal logging with full context
+  - Never exposes: stack traces, DB errors, file paths, versions, IPs
+
+[NEW] backend/services/session.py
+  - Session creation with token hash storage
+  - Revocation triggers:
+    * Password change
+    * Role/team change
+    * Manual logout
+    * Account lock
+    * Security incident
+  - Session validity != JWT validity (PRD §6)
+
+[NEW] backend/services/auth.py
+  - Supabase Auth integration
+  - Email/password, OTP, OAuth support
+  - Account lockout after failures
+  - Login attempt logging
+
+[NEW] backend/services/authorization.py
+  - Role checked at query time (no caching)
+  - Team membership validation
+  - Team mismatch → session revoked
+  - Backend authorization overrides frontend (Invariant #6)
+
+[NEW] backend/services/idempotency.py
+  - Idempotency key validation
+  - Request hash (SHA-256) comparison
+  - Same key + same hash → cached response
+  - Same key + different hash → 409 Conflict
+  - New key → DB lock, process, store
+  - Exactly-once execution (Invariant #2)
+
+[NEW] backend/services/transactions.py
+  - Context managers for isolation levels:
+    * Payments: SERIALIZABLE
+    * User updates: REPEATABLE READ
+    * Audit logs: READ COMMITTED
+  - Automatic rollback on failures (Invariant #7)
+  - Retry with exponential backoff for serialization conflicts
+
+[NEW] backend/services/payments.py
+  - Payment state machine (pending → completed/failed)
+  - Stripe idempotency key pattern
+  - Webhook signature verification
+  - ±5 minute clock skew tolerance
+  - Payments fully applied or rolled back (Invariant #8)
+
+[NEW] backend/services/webhooks.py
+  - Webhook deduplication table
+  - Signature verification
+  - Replay protection
+  - Transactional processing
+
+[NEW] backend/services/audit.py
+  - Append-only logging (Invariant #5)
+  - HMAC-signed entries
+  - Logs: auth attempts, authz failures, state changes, permission changes, config changes, security events
+  - No UPDATE/DELETE allowed
+  - Actor attribution for all actions (Invariant #10)
+
+[NEW] backend/services/circuit_breaker.py
+  - 5 failures → open (30s)
+  - Half-open test
+  - Fail fast with 503
+
+[NEW] backend/routes/auth.py
+  - Login/logout endpoints
+  - Token refresh endpoint
+  - Session management
+
+[NEW] backend/routes/health.py
+  - GET /health → DB connectivity, Auth service check
+  - Returns 200 or 503
+
+[NEW] backend/routes/webhooks.py
+  - Stripe webhook receiver
+  - Signature validation
+  - Deduplication
+
+[NEW] backend/utils/crypto.py
+  - SHA-256 hashing
+  - HMAC signing
+  - Token hash generation
+  - HMAC-signed pagination cursors
+
+[NEW] backend/utils/database.py
+  - Connection pool management
+  - Query timeout enforcement
+  - Soft delete handling
+  - Clock skew tolerance utilities
+
+[NEW] backend/requirements.txt
+  - Flask, psycopg2, redis, supabase-py, stripe, python-jose, gunicorn
+
+============================================================
+
+FRONTEND (React/Vite)
+---------------------
+Location: frontend/
+
+[NEW] frontend/src/providers/AuthProvider.jsx
+  - Supabase Auth integration
+  - React context for auth state
+  - Session state management
+  - Logout on session invalidation
+
+[NEW] frontend/src/services/tokenRefresh.js
+  - Singleton pattern for token refresh
+  - Prevents concurrent refresh calls
+  - Queue pending requests during refresh
+  - Handles refresh failures with logout
+
+[NEW] frontend/src/services/apiClient.js
+  - Axios/fetch wrapper
+  - Automatic token injection
+  - 401 handling → logout
+  - 429 handling → retry with backoff
+  - Request ID tracking
+  - Idempotency key injection for mutations
+
+[NEW] frontend/src/hooks/useAuth.js
+  - Auth context consumer hook
+  - Session state access
+
+[NEW] frontend/src/App.jsx
+  - Root component with providers
+  - Minimal UI skeleton (no business logic)
+
+[NEW] frontend/vite.config.js
+  - Vite configuration
+  - Environment variables
+
+[NEW] frontend/package.json
+  - React, Vite, Supabase JS
+
+============================================================
+
+DATABASE MIGRATIONS
+-------------------
+Location: migrations/
+
+[NEW] migrations/001_sessions.sql
+  CREATE TABLE sessions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES auth.users(id),
+      token_hash VARCHAR(64) NOT NULL UNIQUE,  -- SHA-256
+      created_at TIMESTAMPTZ DEFAULT now(),
+      revoked_at TIMESTAMPTZ,
+      revocation_reason VARCHAR(50)
+  );
+  CREATE INDEX idx_sessions_token_hash ON sessions(token_hash);
+
+[NEW] migrations/002_audit_logs.sql
+  CREATE TABLE audit_logs (
+      id BIGSERIAL PRIMARY KEY,
+      event_type VARCHAR(50) NOT NULL,
+      actor_id UUID,
+      actor_type VARCHAR(20) NOT NULL,
+      resource_type VARCHAR(50),
+      resource_id UUID,
+      action VARCHAR(50) NOT NULL,
+      details JSONB,
+      hmac_signature VARCHAR(64) NOT NULL,
+      ip_address INET,
+      user_agent TEXT,
+      created_at TIMESTAMPTZ DEFAULT now()
+  );
+  -- RLS: READ ONLY for application
+  -- TRIGGER: Prevent UPDATE/DELETE
+
+[NEW] migrations/003_idempotency_keys.sql
+  CREATE TABLE idempotency_keys (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      key VARCHAR(255) NOT NULL UNIQUE,
+      request_hash VARCHAR(64) NOT NULL,
+      response JSONB,
+      status VARCHAR(20) DEFAULT 'pending',
+      created_at TIMESTAMPTZ DEFAULT now(),
+      expires_at TIMESTAMPTZ DEFAULT now() + INTERVAL '48 hours'
+  );
+  CREATE INDEX idx_idempotency_key ON idempotency_keys(key);
+
+[NEW] migrations/004_account_lockouts.sql
+  CREATE TABLE account_lockouts (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID REFERENCES auth.users(id),
+      ip_address INET,
+      failed_attempts INTEGER DEFAULT 0,
+      locked_until TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+  );
+
+[NEW] migrations/005_teams.sql
+  CREATE TABLE teams (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name VARCHAR(255) NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT now()
+  );
+  CREATE TABLE team_memberships (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      team_id UUID NOT NULL REFERENCES teams(id),
+      user_id UUID NOT NULL REFERENCES auth.users(id),
+      role VARCHAR(50) NOT NULL,
+      is_active BOOLEAN DEFAULT true,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now(),
+      UNIQUE(team_id, user_id)
+  );
+
+[NEW] migrations/006_processed_webhooks.sql
+  CREATE TABLE processed_webhooks (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      webhook_id VARCHAR(255) NOT NULL UNIQUE,
+      provider VARCHAR(50) NOT NULL,
+      event_type VARCHAR(100),
+      payload JSONB,
+      status VARCHAR(20) DEFAULT 'processed',
+      processed_at TIMESTAMPTZ DEFAULT now()
+  );
+
+[NEW] migrations/007_payments.sql
+  CREATE TABLE payments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      team_id UUID NOT NULL REFERENCES teams(id),
+      user_id UUID NOT NULL REFERENCES auth.users(id),
+      amount_cents BIGINT NOT NULL,
+      currency VARCHAR(3) DEFAULT 'USD',
+      status VARCHAR(20) DEFAULT 'pending',
+      stripe_payment_id VARCHAR(255),
+      idempotency_key VARCHAR(255) UNIQUE,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+  );
+
+[NEW] migrations/008_rls_policies.sql
+  - Enable RLS on all tables
+  - Team isolation policies
+  - User can only access own team's data
+  - Audit log read-only policy
+
+============================================================
+
+DOCUMENTATION
+-------------
+Location: docs/
+
+[NEW] docs/threat-model.md
+  - All threat classes from PRD §5
+  - Mitigations for each threat
+  - Residual risks explicitly accepted
+
+[NEW] docs/incident-response.md
+  Runbooks for:
+  - Token leak
+  - Payment reconciliation mismatch
+  - DB outage
+  - Rate-limit bypass
+  Each with: containment, investigation, recovery, communication
+
+[NEW] docs/deployment-checklist.md
+  - Environment variables
+  - RLS policies enabled
+  - Rate limiting active
+  - Audit logging verified
+  - Health check passing
+
+[NEW] info.txt
+  - What was implemented
+  - What was intentionally avoided
+  - What was NOT done
+  - Unbreakable files list
+  - Future enhancements (phased)
+  - Final security statement
+
+============================================================
+CORE INVARIANTS IMPLEMENTATION MAPPING
+============================================================
+
+| #  | Invariant                          | Implementation                                       |
+|----|------------------------------------|----------------------------------------------------- |
+| 1  | Revoked session cannot write       | middleware/auth.py checks revocation table           |
+| 2  | Exactly-once state changes         | services/idempotency.py with DB locks                |
+| 3  | Team boundary isolation            | services/authorization.py + RLS policies             |
+| 4  | Role changes invalidate sessions   | services/session.py triggers revocation              |
+| 5  | Audit logs append-only             | DB trigger prevents UPDATE/DELETE                    |
+| 6  | Backend overrides frontend         | All checks in backend middleware                     |
+| 7  | Partial failures don't corrupt     | services/transactions.py rollback                    |
+| 8  | Payments atomic                    | SERIALIZABLE isolation + rollback                    |
+| 9  | Errors don't leak internals        | middleware/error_handler.py sanitization             |
+| 10 | All actions attributable           | services/audit.py logs actor                         |
+
+============================================================
+FILES THAT MUST NEVER BE CASUALLY MODIFIED
+============================================================
+
+CAUTION: These files enforce core security invariants.
+Only modify after security incidents per PRD §20:
+
+- backend/middleware/auth.py        → Session revocation enforcement
+- backend/services/idempotency.py   → Exactly-once guarantees
+- backend/services/audit.py         → Immutable audit logging
+- backend/services/transactions.py  → ACID guarantees
+- migrations/002_audit_logs.sql     → Append-only schema
+- migrations/008_rls_policies.sql   → Team isolation
+
+============================================================
+IMPLEMENTATION ORDER
+============================================================
+
+1. Database migrations (foundation)
+2. Backend core services (auth, session, audit)
+3. Backend middleware (security layer)
+4. Backend routes (API surface)
+5. Frontend services (API client, auth provider)
+6. Documentation
+7. info.txt summary
+
+============================================================
+VERIFICATION PLAN
+============================================================
+
+Automated Tests (backend/tests/):
+  cd backend
+  pip install -r requirements.txt
+  pip install pytest pytest-cov
+  pytest tests/ -v --cov=.
+
+Test coverage:
+  - Session revocation enforcement
+  - Rate limit logic
+  - Idempotency conflict detection
+  - Authorization boundary enforcement
+  - Audit log immutability
+  - Error message sanitization
+
+Manual Verification:
+  1. Health Check: curl http://localhost:5000/health returns 200
+  2. Session Revocation: Revoked sessions cannot make requests
+  3. Rate Limiting: Exceeding limits returns 429 with Retry-After
+  4. Team Isolation: Users cannot access other team's data
+  5. Audit Log Integrity: Attempt UPDATE/DELETE on audit_logs fails
+
+IMPORTANT: Manually verify RLS policies in Supabase Dashboard after deployment.

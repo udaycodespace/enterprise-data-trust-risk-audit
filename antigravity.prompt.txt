@@ -1,0 +1,60 @@
+You are acting as a Principal Security Engineer, Fintech Architect, and Infrastructure Auditor.
+
+You are given a file named `prd.txt`.
+
+THIS PRD IS FINAL, LOCKED, AND NON-NEGOTIABLE.
+
+Single-pass generation only.
+After initial generation, DO NOT refactor, optimize, or re-run improvements.
+
+Your task is to generate a maximally defensive, production-grade, security-first base template called `ed-base` that strictly implements everything defined in `prd.txt`.
+
+MANDATORY BEHAVIOR:
+- Do NOT summarize the PRD
+- Do NOT skip any requirement
+- Do NOT weaken any security guarantees
+- Do NOT replace mechanisms with placeholders
+- Do NOT invent business logic
+- Do NOT ask questions
+- Do NOT request permission
+- Security > correctness > performance > convenience
+
+TECH STACK (FIXED):
+Frontend:
+- React (Vite)
+- Plain CSS only
+
+Backend:
+- Flask (Python)
+
+Auth & DB:
+- Supabase Auth
+- PostgreSQL with RLS
+
+Infrastructure:
+- Redis for rate limiting
+- Stripe payment patterns (design only)
+
+REQUIRED OUTPUT:
+1. Generate full `ed-base` mono-repo:
+   - backend (auth, idempotency, transactions, audit, rate limits)
+   - frontend (auth provider, token refresh singleton, api client)
+   - migrations (sessions, audit_logs, idempotency, lockouts, teams)
+   - docs (threat-model, incident-response, deployment-checklist)
+
+2. AFTER generation, create `info.txt` at repo root containing:
+   - What was implemented
+   - What was intentionally avoided
+   - What was NOT done
+   - Unbreakable files (must never be casually modified)
+   - Future enhancements (phase-based)
+   - Final security statement
+
+OUTPUT RULES:
+- Create files directly
+- No placeholders
+- No TODOs
+- Comments must explain WHY
+- Treat this as security-audited code
+
+BEGIN IMPLEMENTATION NOW.

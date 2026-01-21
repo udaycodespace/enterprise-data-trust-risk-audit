@@ -1,0 +1,432 @@
+Understood.
+Below is the **FINAL, MERGED, SECURITY-MAXIMAL `prd.md`** that **fully incorporates everything you listed** (loopholes, edge cases, operational controls, iteration loop, invariants, residual risk).
+
+This is the **one and only PRD** you should give to **Google Antigravity**.
+After this, **ED-BASE is frozen**.
+
+No explanations. No commentary.
+Just the document.
+
+---
+
+# 📘 **ED-BASE — Product Requirements Document (FINAL)**
+
+**Enterprise / Fintech-Grade Security & Reliability Foundation**
+
+---
+
+## 1. Executive Summary
+
+**ED-BASE** is a reusable, security-first foundation for building enterprise and fintech-grade applications where **failure, abuse, and compromise are assumed**.
+
+ED-BASE exists to:
+
+* eliminate common security loopholes
+* guarantee exactly-once state changes
+* enforce strict authorization boundaries
+* provide full auditability
+* fail safely and recover predictably
+
+ED-BASE is **not a business product**.
+It is a **permanent, frozen base layer** on top of which products (e.g., ED-TRAIL) are built.
+
+---
+
+## 2. Scope & Explicit Non-Goals
+
+### In Scope
+
+* Authentication & session lifecycle
+* Authorization & team isolation
+* API safety & abuse prevention
+* Idempotency & replay protection
+* Transactional integrity (ACID)
+* Audit logging & immutability
+* Failure handling & recovery
+* Observability & incident response
+
+### Explicit Non-Goals
+
+* Business logic
+* UI polish or branding
+* Analytics dashboards
+* Real-time fraud ML
+* Zero-downtime guarantees
+* Preventing phishing or malware
+* Custom cryptography
+* DDoS mitigation beyond CDN/WAF
+
+---
+
+## 3. Assumptions
+
+* Supabase Auth is not compromised
+* PostgreSQL enforces ACID guarantees
+* Network is hostile
+* Frontend is fully compromised
+* Attackers may have unlimited compute
+* Some users may have malware
+* CDN/WAF handles volumetric DDoS
+
+---
+
+## 4. Core Invariants (Must Never Break)
+
+1. A revoked session **can never** perform a write
+2. A state-changing action executes **exactly once**
+3. Users **cannot** cross team boundaries
+4. Role changes invalidate sessions immediately
+5. Audit logs are **append-only and immutable**
+6. Backend authorization overrides frontend state
+7. Partial failures never corrupt persistent state
+8. Payments are either fully applied or rolled back
+9. Errors never leak internal system details
+10. All critical actions are attributable to an actor
+
+Any behavior that does **not violate an invariant is not a blocker**.
+
+---
+
+## 5. Threat Model
+
+### Covered Threat Classes
+
+* Account takeover
+* Session replay & fixation
+* Authorization bypass (IDOR)
+* Double spending & race conditions
+* API abuse & scraping
+* Webhook replay
+* Insider misuse
+* Information disclosure
+* Partial infrastructure failure
+
+---
+
+## 6. Authentication & Session Management
+
+### Supported Auth Methods
+
+* Email/password
+* Email OTP (magic link)
+* Phone OTP
+* Google OAuth
+
+### Session Rules
+
+* Short-lived JWT access tokens
+* Refresh tokens with rotation
+* **Session revocation table**
+* Revocation enforced on **every request**
+* Forced logout on:
+
+  * password change
+  * role/team change
+  * manual logout
+  * account lock
+  * security incident
+
+### Session Revocation Table
+
+```
+sessions:
+- token_hash (SHA-256 of JWT)
+- revoked_at
+```
+
+JWT validity **does not imply** session validity.
+
+---
+
+## 7. Authorization Model
+
+* Users belong to one or more teams
+* Every request is scoped to an active team
+* Role checked at **query time**
+* No permission caching
+* Team mismatch → session revoked
+
+Enforced via:
+
+* Backend middleware
+* PostgreSQL Row-Level Security (RLS)
+
+---
+
+## 8. API Rate Limiting & Abuse Prevention
+
+### Storage
+
+* Redis (distributed, sliding window)
+
+### Layers
+
+* Per-IP: 100 req/min
+* Per-User: 50 req/min
+* Per-Endpoint:
+
+  * Login: 10/min
+  * Payments: 5/min
+
+### Requirements
+
+* Do not trust X-Forwarded-For alone
+* Combine IP + User-Agent + fingerprint
+* Return `429` with `Retry-After`
+* Log all rate-limit violations
+
+---
+
+## 9. Idempotency & Replay Protection
+
+### Idempotency Table
+
+```
+idempotency_keys:
+- key (unique)
+- request_hash (SHA-256)
+- response (JSONB)
+- created_at
+- expires_at (24–48h)
+```
+
+### Validation Logic
+
+1. Same key + same hash → return cached response
+2. Same key + different hash → **409 Conflict**
+3. New key → lock, process, store
+
+Race conditions resolved via DB constraints and locks.
+
+---
+
+## 10. Transactions & ACID Guarantees
+
+### Isolation Levels
+
+* Payments: SERIALIZABLE
+* User updates: REPEATABLE READ
+* Audit logs: READ COMMITTED
+
+### Guarantees
+
+* No double spend
+* No partial writes
+* Automatic rollback
+* Bounded retries on serialization conflicts
+
+---
+
+## 11. Payment Processing & Webhooks
+
+### Payment Flow
+
+1. Create payment (status = pending)
+2. Charge via Stripe (idempotency key)
+3. Update status = completed
+4. Webhook confirms or corrects state
+
+### Webhook Deduplication
+
+```
+processed_webhooks:
+- webhook_id (unique)
+- processed_at
+- payload
+- status
+```
+
+* Signature verification
+* Replay protection
+* ±5 minute clock skew tolerance
+* Transactional processing
+
+---
+
+## 12. Error Handling & Information Disclosure
+
+### Client-Facing Errors
+
+* Generic messages
+* Stable error codes
+* Request ID
+
+### Internal Logs
+
+* Full stack trace
+* Actor identity
+* Sanitized inputs
+* Timestamp (ms precision)
+
+### Never Return
+
+* Stack traces
+* DB errors
+* File paths
+* Library versions
+* Internal IPs
+
+---
+
+## 13. Audit Logging
+
+### Must Log
+
+* Auth attempts
+* Authorization failures
+* State changes
+* Permission changes
+* Configuration changes
+* Security events
+
+### Properties
+
+* Append-only
+* No UPDATE or DELETE
+* HMAC-signed
+* Archived to immutable storage
+* Retention:
+
+  * Hot: 90 days
+  * Cold: 7 years
+
+---
+
+## 14. Database & Connection Safety
+
+### Pool Configuration
+
+* Min: 5
+* Max: 20
+* Idle timeout: 10 min
+* Max lifetime: 1 hr
+
+### Timeouts
+
+* Default: 30s
+* Payments: 10s
+* Reports: paginated, long-running
+
+### Circuit Breaker
+
+* 5 failures → open (30s)
+* Half-open test
+* Fail fast with 503
+
+### Health Check
+
+```
+GET /health
+- DB connectivity
+- Auth service
+- Returns 200 or 503
+```
+
+---
+
+## 15. Edge Cases (Mandatory)
+
+* User deleted mid-request (soft delete)
+* Clock skew (±5 min tolerance)
+* Partial payment success
+* Concurrent team changes
+* Pagination cursor forgery (HMAC-signed cursors)
+
+---
+
+## 16. Observability & Monitoring
+
+### Metrics
+
+* Failed login rate
+* Lockout rate
+* Payment error rate
+* API latency (p95)
+* DB pool usage
+
+### Alerts
+
+* Critical: on-call
+* High: Slack
+* Medium: email
+
+---
+
+## 17. Incident Response Runbook
+
+### Covered Scenarios
+
+* Token leak
+* Payment reconciliation mismatch
+* DB outage
+* Rate-limit bypass
+
+Each incident has:
+
+* containment
+* investigation
+* recovery
+* communication steps
+
+---
+
+## 18. Security Testing Strategy
+
+### Required Tests
+
+* Revoked session usage
+* Auth bypass attempts
+* Race condition simulations
+* Idempotency conflicts
+* Rate-limit enforcement
+* Failure recovery
+
+Security tests are **blocking**.
+
+---
+
+## 19. Residual Risk (Explicitly Accepted)
+
+* Phishing
+* User malware
+* Account sharing
+* Large-scale DDoS
+* Insider admin abuse (detected, not prevented)
+
+These risks are accepted with compensating controls.
+
+---
+
+## 20. Security Iteration Policy (LOCKED)
+
+Security hardening follows this loop:
+
+1. Declare invariants
+2. Assume attacker capability
+3. Enumerate attacks
+4. Attempt invariant violation
+5. Observe logs & behavior
+6. Patch root cause only
+7. Lock iteration (no rework)
+8. Record residual risk
+
+ED-BASE is modified **only after real incidents**.
+
+---
+
+## 21. Success Criteria
+
+* No silent security failures
+* Exactly-once state changes
+* Full audit traceability
+* Predictable recovery
+* Reusable across products
+
+---
+
+## FINAL STATEMENT
+
+ED-BASE does **not** claim perfect security.
+It guarantees **bounded, understood, survivable risk**.
+
+This document is **final and authoritative**.
